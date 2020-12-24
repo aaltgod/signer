@@ -1,53 +1,54 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"sync"
+)
 
-func SingleHash(data string) chan string{
-	if len(data) > MaxInputDataLen {
-		fmt.Errorf("len of DATA > 100")
-	}
+var combinedResult string
 
-	ch := make(chan string, 1)
+func SingleHash(dataCh chan string) {
 
-	go func(ch chan<- string, data string) {
+	data := <-dataCh
+	mu := &sync.Mutex{}
+	go func(data string, mu *sync.Mutex){
+		mu.Lock()
 		md5Data := DataSignerMd5(data)
 		crc32Md5Data := DataSignerCrc32(md5Data)
 		crc32Data := DataSignerCrc32(data)
-		ch <- crc32Md5Data + "~" + crc32Data
-	}(ch, data)
-
-	return ch
+		dataCh <- crc32Md5Data + "~" + crc32Data
+		mu.Unlock()
+	}(data, mu)
 }
 
-func Multihash(data string) string{
+func MultiHash(dataCh chan string){
 
-	ch := make(chan string, 1)
-	ch <- DataSignerCrc32(data)
-
-	return <-ch
-
+	singleHashedData := <-dataCh
+	dataCh <- DataSignerCrc32(singleHashedData)
 }
 
-func CombineResults(data chan string) string{
-	result :
+func CombineResults(dataCh chan string){
+
+	finallyHashedData := <-dataCh
+	combinedResult += finallyHashedData + "_"
 }
 
 func ExecutePipeline(data string) {
 
-	inputCh := make(chan string, 1)
-	hashCh := make(chan string, 1)
-	combineCh := make(chan string,1)
+	dataCh := make(chan string, 1)
+	dataCh <- data
 
-	inputCh <-data
-	hashCh <-SingleHash(<-inputCh)
-	combineCh <-Multihash(<-hashCh)
-
+	SingleHash(dataCh)
+	MultiHash(dataCh)
+	CombineResults(dataCh)
 
 }
 
 func main() {
 
-	data := "sss"
-
-	ExecutePipeline(data)
+	data := []string{"0", "1", "2", "3", "4"}
+	for _, d := range data {
+		ExecutePipeline(d)
+	}
+	fmt.Println(combinedResult)
 }
