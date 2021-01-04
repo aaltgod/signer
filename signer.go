@@ -2,53 +2,117 @@ package main
 
 import (
 	"fmt"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 )
 
-var combinedResult string
 
-func SingleHash(dataCh chan string) {
+var intermediateResult []string
 
-	data := <-dataCh
+func executeMd5(data string, mu *sync.Mutex, out chan string) {
+	mu.Lock()
+	md5Data := DataSignerMd5(data)
+	mu.Unlock()
+	out <-md5Data
+}
+
+func executeCrc32(data string, out chan string) {
+
+	out <-DataSignerCrc32(data)
+}
+
+func SingleHash(in, output chan interface{}) {
+
 	mu := &sync.Mutex{}
-	go func(data string, mu *sync.Mutex){
-		mu.Lock()
-		md5Data := DataSignerMd5(data)
-		crc32Md5Data := DataSignerCrc32(md5Data)
-		crc32Data := DataSignerCrc32(data)
-		dataCh <- crc32Md5Data + "~" + crc32Data
-		mu.Unlock()
-	}(data, mu)
-}
+	wg := &sync.WaitGroup{}
+	md5Out := make(chan string)
+	crc32Out := make(chan string)
+	md5Crc32Out := make(chan string)
 
-func MultiHash(dataCh chan string){
+	for d := range in {
+		wg.Add(1)
+		data := fmt.Sprintf("%v", d)
 
-	singleHashedData := <-dataCh
-	dataCh <- DataSignerCrc32(singleHashedData)
-}
+		go func(data string, wg *sync.WaitGroup) {
+			defer wg.Done()
 
-func CombineResults(dataCh chan string){
+			go executeMd5(data, mu, md5Out)
+			go executeCrc32(<-md5Out, md5Crc32Out)
+			go executeCrc32(data, crc32Out)
 
-	finallyHashedData := <-dataCh
-	combinedResult += finallyHashedData + "_"
-}
+			output <- <-crc32Out + "~" + <-md5Crc32Out
+		}(data, wg)
 
-func ExecutePipeline(data string) {
-
-	dataCh := make(chan string, 1)
-	dataCh <- data
-
-	SingleHash(dataCh)
-	MultiHash(dataCh)
-	CombineResults(dataCh)
-
-}
-
-func main() {
-
-	data := []string{"0", "1", "2", "3", "4"}
-	for _, d := range data {
-		ExecutePipeline(d)
 	}
-	fmt.Println(combinedResult)
+
+	wg.Wait()
+
 }
+
+func MultiHash(in, output chan interface{}){
+
+	wg := &sync.WaitGroup{}
+
+	for d := range in {
+		singleHashedData := fmt.Sprintf("%v", d)
+
+		wg.Add(1)
+
+		go func(data string, wg *sync.WaitGroup) {
+			defer wg.Done()
+
+			out := make([]chan string, 6)
+			for th := range out {
+				out[th] = make(chan string)
+				go executeCrc32(strconv.Itoa(th) + singleHashedData, out[th])
+
+			}
+
+			result := ""
+			for th := range out {
+				result += <-out[th]
+			}
+
+			output <- result
+		}(singleHashedData, wg)
+	}
+
+	wg.Wait()
+}
+
+func CombineResults(in, output chan interface{}){
+
+	for d := range in {
+		finallyHashedData := fmt.Sprintf("%v", d)
+		intermediateResult = append(intermediateResult, finallyHashedData)
+	}
+
+	sort.Strings(intermediateResult)
+	combinedResult := strings.Join(intermediateResult, "_")
+	output <- combinedResult
+}
+
+func ExecutePipeline(jobs ...job) {
+
+	wg := &sync.WaitGroup{}
+	in := make(chan interface{}, 7)
+
+	for _, j := range jobs {
+		wg.Add(1)
+		out := make(chan interface{}, 7)
+
+		go func(job job, in, out chan interface{}, wg *sync.WaitGroup) {
+			defer wg.Done()
+			defer close(out)
+
+			job(in, out)
+		}(j, in, out, wg)
+
+		in = out
+	}
+
+	wg.Wait()
+}
+
