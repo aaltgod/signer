@@ -97,11 +97,11 @@ func CombineResults(in, output chan interface{}){
 func ExecutePipeline(jobs ...job) {
 
 	wg := &sync.WaitGroup{}
-	in := make(chan interface{}, 7)
+	in := make(chan interface{})
 
 	for _, j := range jobs {
 		wg.Add(1)
-		out := make(chan interface{}, 7)
+		out := make(chan interface{})
 
 		go func(job job, in, out chan interface{}, wg *sync.WaitGroup) {
 			defer wg.Done()
